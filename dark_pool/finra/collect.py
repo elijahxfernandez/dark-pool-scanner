@@ -39,6 +39,10 @@ ATS_SYMBOL_ROWS = "ATS_W_SMBL"  # confirmed via /metadata: security-level ATS (d
 # tierIdentifier is passed explicitly. Not documented anywhere; found by noticing
 # AAPL/MSFT/JPM never appeared in any pulled week. Must query each tier separately.
 TIERS = ["T1", "T2", "OTCE"]
+# Known gap: 2026-01-19 sits right at the historic/live dataset boundary and gets
+# a hard 400 (not a retriable server error) from the live dataset - neither dataset
+# covers it. One week out of ~250, not worth chasing further.
+#
 # A small number of specific weeks (confirmed: 2025-07-14, 07-21, 08-18, 09-01,
 # 09-15, 09-22) have ZERO ATS_W_SMBL rows for the T2 tier specifically, verified
 # across three separate pull attempts (full bulk pull, a retry, and a targeted

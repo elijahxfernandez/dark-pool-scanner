@@ -77,7 +77,7 @@ class FinraClient:
             resp = requests.post(url, headers=self._headers(), json=body, timeout=30)
             if resp.status_code < 500:  # 4xx is a real error (bad request) - don't retry those
                 resp.raise_for_status()
-                return resp.json()
+                return resp.json() if resp.content else []  # 204/empty body = no data, not an error
             last_exc = requests.exceptions.HTTPError(f"{resp.status_code} Server Error", response=resp)
             if attempt < RETRY_ATTEMPTS - 1:
                 time.sleep(RETRY_BASE_DELAY * (2**attempt))
