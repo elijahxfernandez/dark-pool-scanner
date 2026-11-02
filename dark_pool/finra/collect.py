@@ -39,6 +39,12 @@ ATS_SYMBOL_ROWS = "ATS_W_SMBL"  # confirmed via /metadata: security-level ATS (d
 # tierIdentifier is passed explicitly. Not documented anywhere; found by noticing
 # AAPL/MSFT/JPM never appeared in any pulled week. Must query each tier separately.
 TIERS = ["T1", "T2", "OTCE"]
+# A small number of specific weeks (confirmed: 2025-07-14, 07-21, 08-18, 09-01,
+# 09-15, 09-22) have ZERO ATS_W_SMBL rows for the T2 tier specifically, verified
+# across three separate pull attempts (full bulk pull, a retry, and a targeted
+# 100,000-row fetch that returned no matching rows at all). T1 and OTCE are fine
+# for those same weeks. This looks like a genuine gap in FINRA's own data for that
+# slice, not a bug on our end - not worth chasing further.
 
 # Publication lag confirmed from FINRA docs: Tier 1 (S&P 500/Russell 1000) = 2 weeks,
 # everything else = 4 weeks. Skip weeks too recent to be published yet.

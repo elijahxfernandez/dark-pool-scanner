@@ -1,0 +1,20 @@
+Dataset's valid range right now: 2021-11-02 to 2025-11-01 (the most recent ~year isn't in this dataset - that needs FINRA's live weeklySummary instead)
+16 weeks requested, 0 already saved, pulling 16 with 10 workers...
+  [1/16] 2025-08-11: 10,506 ATS symbol-rows saved
+  [2/16] 2025-08-04: 10,982 ATS symbol-rows saved
+  [3/16] 2025-07-28: 10,889 ATS symbol-rows saved
+  [4/16] 2025-08-25: 10,611 ATS symbol-rows saved
+  [5/16] 2025-09-08: 11,101 ATS symbol-rows saved
+  [6/16] 2025-08-18: 5,277 ATS symbol-rows saved
+  [7/16] 2025-09-01: 5,102 ATS symbol-rows saved
+  [8/16] 2025-07-14: 5,654 ATS symbol-rows saved
+  [9/16] 2025-09-15: 5,383 ATS symbol-rows saved
+  [10/16] 2025-07-21: 5,382 ATS symbol-rows saved
+  [11/16] 2025-09-29: 10,591 ATS symbol-rows saved
+  [12/16] 2025-10-20: 10,907 ATS symbol-rows saved
+  [13/16] 2025-10-13: 10,853 ATS symbol-rows saved
+  [14/16] 2025-10-06: 11,108 ATS symbol-rows saved
+  [15/16] 2025-10-27: 10,972 ATS symbol-rows saved
+  [16/16] 2025-09-22: 5,458 ATS symbol-rows saved
+
+16 weeks saved total, 0 empty/not published, 0 failed -> C:\Users\elija\OneDrive\Desktop\Dark Pool Scanner\data\finra_ats
