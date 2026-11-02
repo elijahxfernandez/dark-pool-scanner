@@ -1,0 +1,22 @@
+[project]
+name = "dark-pool-scanner"
+version = "0.1.0"
+description = "Dark pool / off-exchange flow tool. Starts on FINRA's free public historical ATS data; switches to Massive's live trades feed once subscribed."
+requires-python = ">=3.11"
+dependencies = [
+  "requests",
+  "python-dotenv",
+  "pandas",
+]
+
+[dependency-groups]
+dev = [
+  "pytest",
+  "responses",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
