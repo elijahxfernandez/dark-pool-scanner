@@ -22,12 +22,14 @@ from shared.config import finra_credentials
 TOKEN_URL = "https://ews.fip.finra.org/fip/rest/ews/oauth2/access_token"
 API_ROOT = "https://api.finra.org"
 GROUP = "otcMarket"
-DATASET = "weeklySummaryHistoric"
+DATASET = "weeklySummaryHistoric"  # ~4 years back, but lags present by ~1 year
+LIVE_DATASET = "weeklySummary"     # rolling ~12 months, same schema, covers recent weeks
 PAGE_LIMIT = 5000  # FINRA's documented sync-request cap
 
 
 class FinraClient:
-    def __init__(self):
+    def __init__(self, dataset: str = DATASET):
+        self.dataset = dataset
         self._token = None
         self._token_expiry = 0.0
 
@@ -54,7 +56,7 @@ class FinraClient:
         """The dataset's real field schema, straight from FINRA - use this to confirm
         field names (e.g. is it issueSymbolIdentifier or something else?) before
         trusting any filter you build."""
-        url = f"{API_ROOT}/metadata/group/{GROUP}/name/{DATASET}"
+        url = f"{API_ROOT}/metadata/group/{GROUP}/name/{self.dataset}"
         resp = requests.get(url, headers=self._headers(), timeout=15)
         resp.raise_for_status()
         return resp.json()
@@ -65,7 +67,7 @@ class FinraClient:
         Field names must come from fields() - this dataset's exact names aren't
         publicly documented, so don't assume one without checking first.
         """
-        url = f"{API_ROOT}/data/group/{GROUP}/name/{DATASET}"
+        url = f"{API_ROOT}/data/group/{GROUP}/name/{self.dataset}"
         body = {"limit": limit, "offset": offset}
         if filters:
             body["compareFilters"] = filters

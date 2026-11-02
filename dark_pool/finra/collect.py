@@ -27,7 +27,7 @@ from datetime import date, timedelta
 import pandas as pd
 import requests
 
-from dark_pool.finra.client import FinraClient
+from dark_pool.finra.client import LIVE_DATASET, FinraClient
 from shared.config import DATA_DIR
 
 FINRA_DIR = DATA_DIR / "finra_ats"
@@ -101,7 +101,8 @@ def pull_week(client: FinraClient, week_start: str) -> pd.DataFrame:
     return df[df["summaryTypeCode"] == ATS_SYMBOL_ROWS] if "summaryTypeCode" in df.columns else df
 
 
-def pull(weeks_back: int | None = None, workers: int = 24, explicit_weeks: list[str] | None = None, force: bool = False):
+def pull(weeks_back: int | None = None, workers: int = 24, explicit_weeks: list[str] | None = None,
+         force: bool = False, client: FinraClient | None = None):
     """Pulls weeks CONCURRENTLY (each week is an independent request covering the
     whole market) - FINRA's documented limit is 1200 sync requests/minute/IP, but in
     practice their backend seems to degrade under sustained heavy parallel load
@@ -109,7 +110,7 @@ def pull(weeks_back: int | None = None, workers: int = 24, explicit_weeks: list[
     5xx errors with backoff, and a lower worker count helps for a retry pass.
     Each week is still paginated internally by query_all()."""
     FINRA_DIR.mkdir(parents=True, exist_ok=True)
-    client = FinraClient()
+    client = client or FinraClient()
 
     if explicit_weeks:
         weeks = explicit_weeks
@@ -147,6 +148,25 @@ def pull(weeks_back: int | None = None, workers: int = 24, explicit_weeks: list[
         print("Failed (retry these):", ", ".join(failed))
 
 
+def pull_live(weeks_back: int = 16, workers: int = 10, force: bool = False) -> int:
+    """Bridges the gap the historic dataset can't cover: FINRA's `weeklySummary`
+    (rolling ~12 months, same schema/tier bug as the historic one, confirmed live)
+    has the recent weeks the historic one is missing. Probes for real data rather
+    than trusting a fixed range - weeklySummary doesn't return FINRA's min/max-date
+    error the historic dataset does, so there's no bound to parse; an empty week
+    just means not published yet (respects PUBLISH_LAG_WEEKS) or genuinely empty.
+    Writes into the SAME data/finra_ats/ folder, so scanner.py/analysis.py pick up
+    recent weeks automatically - no changes needed there."""
+    client = FinraClient(dataset=LIVE_DATASET)
+    today = date.today()
+    anchor = (today - timedelta(weeks=PUBLISH_LAG_WEEKS)).isoformat()
+    weeks = mondays_back(weeks_back, anchor=anchor)
+    print(f"Live dataset ({LIVE_DATASET}): probing the last {weeks_back} weeks up to {anchor}")
+    before = len(list(FINRA_DIR.glob("*.csv")))
+    pull(workers=workers, explicit_weeks=weeks, force=force, client=client)
+    return len(list(FINRA_DIR.glob("*.csv"))) - before
+
+
 def refresh(workers: int = 4) -> int:
     """Incremental update: pull only weeks newer than what's already saved, up to
     the dataset's current max_date. Meant to run on a schedule (e.g. 3x/day) - cheap
@@ -159,14 +179,17 @@ def refresh(workers: int = 4) -> int:
     newest_saved = saved[-1] if saved else min_date
     candidates = [w for w in mondays_back(60, anchor=max_date) if newest_saved < w <= max_date]
 
-    if not candidates:
-        print(f"Up to date - newest saved week is {newest_saved}, dataset max is {max_date}.")
-        return 0
-    print(f"{len(candidates)} new week(s) available since {newest_saved}: {', '.join(candidates)}")
-    before = len(list(FINRA_DIR.glob("*.csv")))
-    pull(workers=workers, explicit_weeks=candidates)
-    after = len(list(FINRA_DIR.glob("*.csv")))
-    return after - before
+    added = 0
+    if candidates:
+        print(f"{len(candidates)} new historic week(s) available since {newest_saved}: {', '.join(candidates)}")
+        before = len(list(FINRA_DIR.glob("*.csv")))
+        pull(workers=workers, explicit_weeks=candidates)
+        added += len(list(FINRA_DIR.glob("*.csv"))) - before
+    else:
+        print(f"Historic dataset up to date - newest saved week is {newest_saved}, dataset max is {max_date}.")
+
+    added += pull_live(weeks_back=4, workers=workers)  # also keep recent weeks current
+    return added
 
 
 def main():
@@ -176,6 +199,7 @@ def main():
     parser.add_argument("--all", action="store_true", help="Pull the dataset's ENTIRE available range (~209 weeks)")
     parser.add_argument("--weeks", nargs="+", help="Retry specific weeks (yyyy-MM-dd Mondays), e.g. failed ones from a prior run")
     parser.add_argument("--refresh", action="store_true", help="Pull only new weeks since the last run (for scheduling, e.g. 3x/day)")
+    parser.add_argument("--live", action="store_true", help="Pull recent weeks from FINRA's live weeklySummary dataset (bridges the historic dataset's ~1yr lag)")
     parser.add_argument("--workers", type=int, default=24, help="Concurrent week-pulls (lower this for a retry pass - the backend seems to strain under sustained heavy load)")
     parser.add_argument("--force", action="store_true", help="Re-pull weeks even if already saved (e.g. to backfill the T1-tier fix)")
     args = parser.parse_args()
@@ -185,6 +209,10 @@ def main():
         return
     if args.refresh:
         refresh(workers=args.workers)
+        return
+    if args.live:
+        weeks_back = args.weeks_back or 16
+        pull_live(weeks_back=weeks_back, workers=args.workers, force=args.force)
         return
     if args.weeks:
         pull(workers=args.workers, explicit_weeks=args.weeks, force=args.force)
