@@ -7,6 +7,8 @@ dependencies = [
   "requests",
   "python-dotenv",
   "pandas",
+  "streamlit>=1.66.1",
+  "plotly>=7.1.0",
 ]
 
 [dependency-groups]

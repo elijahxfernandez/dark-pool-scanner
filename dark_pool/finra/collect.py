@@ -34,6 +34,11 @@ FINRA_DIR = DATA_DIR / "finra_ats"
 SYMBOL_FIELD = "issueSymbolIdentifier"
 DATE_FIELD = "weekStartDate"  # confirmed: dataset's partition key, the only valid query field (besides tier)
 ATS_SYMBOL_ROWS = "ATS_W_SMBL"  # confirmed via /metadata: security-level ATS (dark pool) rows specifically
+# CONFIRMED BUG WORKAROUND: querying by weekStartDate alone silently returns ONLY
+# Tier 2 rows - Tier 1 (S&P 500/Russell 1000, i.e. every mega-cap) is missing unless
+# tierIdentifier is passed explicitly. Not documented anywhere; found by noticing
+# AAPL/MSFT/JPM never appeared in any pulled week. Must query each tier separately.
+TIERS = ["T1", "T2", "OTCE"]
 
 # Publication lag confirmed from FINRA docs: Tier 1 (S&P 500/Russell 1000) = 2 weeks,
 # everything else = 4 weeks. Skip weeks too recent to be published yet.
@@ -73,16 +78,24 @@ def allowed_range(client: FinraClient) -> tuple[str, str]:
 
 
 def pull_week(client: FinraClient, week_start: str) -> pd.DataFrame:
-    """One week, every symbol, ATS-only rows (client-side filtered - the API won't
-    filter by summaryTypeCode or symbol server-side)."""
-    rows = client.query_all([{"compareType": "EQUAL", "fieldName": DATE_FIELD, "fieldValue": week_start}])
-    if not rows:
+    """One week, every symbol in every tier (T1/T2/OTCE - see TIERS note above),
+    ATS-only rows (client-side filtered - the API won't filter by summaryTypeCode
+    server-side)."""
+    frames = []
+    for tier in TIERS:
+        rows = client.query_all([
+            {"compareType": "EQUAL", "fieldName": DATE_FIELD, "fieldValue": week_start},
+            {"compareType": "EQUAL", "fieldName": "tierIdentifier", "fieldValue": tier},
+        ])
+        if rows:
+            frames.append(pd.DataFrame(rows))
+    if not frames:
         return pd.DataFrame()
-    df = pd.DataFrame(rows)
+    df = pd.concat(frames, ignore_index=True)
     return df[df["summaryTypeCode"] == ATS_SYMBOL_ROWS] if "summaryTypeCode" in df.columns else df
 
 
-def pull(weeks_back: int | None = None, workers: int = 24, explicit_weeks: list[str] | None = None):
+def pull(weeks_back: int | None = None, workers: int = 24, explicit_weeks: list[str] | None = None, force: bool = False):
     """Pulls weeks CONCURRENTLY (each week is an independent request covering the
     whole market) - FINRA's documented limit is 1200 sync requests/minute/IP, but in
     practice their backend seems to degrade under sustained heavy parallel load
@@ -100,7 +113,7 @@ def pull(weeks_back: int | None = None, workers: int = 24, explicit_weeks: list[
               f"(the most recent ~year isn't in this dataset - that needs FINRA's live weeklySummary instead)")
         weeks = [w for w in mondays_back(weeks_back, anchor=max_date) if w >= min_date]
 
-    todo = [w for w in weeks if not (FINRA_DIR / f"{w}.csv").exists()]
+    todo = weeks if force else [w for w in weeks if not (FINRA_DIR / f"{w}.csv").exists()]
     already = len(weeks) - len(todo)
     print(f"{len(weeks)} weeks requested, {already} already saved, pulling {len(todo)} with {workers} workers...")
 
@@ -158,6 +171,7 @@ def main():
     parser.add_argument("--weeks", nargs="+", help="Retry specific weeks (yyyy-MM-dd Mondays), e.g. failed ones from a prior run")
     parser.add_argument("--refresh", action="store_true", help="Pull only new weeks since the last run (for scheduling, e.g. 3x/day)")
     parser.add_argument("--workers", type=int, default=24, help="Concurrent week-pulls (lower this for a retry pass - the backend seems to strain under sustained heavy load)")
+    parser.add_argument("--force", action="store_true", help="Re-pull weeks even if already saved (e.g. to backfill the T1-tier fix)")
     args = parser.parse_args()
 
     if args.discover:
@@ -167,7 +181,7 @@ def main():
         refresh(workers=args.workers)
         return
     if args.weeks:
-        pull(workers=args.workers, explicit_weeks=args.weeks)
+        pull(workers=args.workers, explicit_weeks=args.weeks, force=args.force)
         return
     if args.all:
         min_date, max_date = allowed_range(FinraClient())
@@ -177,7 +191,7 @@ def main():
         weeks_back = args.weeks_back
     else:
         parser.error("--weeks-back N, --all, --weeks, or --discover is required")
-    pull(weeks_back, workers=args.workers)
+    pull(weeks_back, workers=args.workers, force=args.force)
 
 
 if __name__ == "__main__":
