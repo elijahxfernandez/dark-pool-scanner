@@ -24,9 +24,13 @@ st.set_page_config(page_title="Dark Pool Scanner", layout="wide")
 
 PLOTLY_LAYOUT = dict(
     paper_bgcolor=SURFACE, plot_bgcolor=SURFACE,
-    font=dict(color=INK_2), xaxis=dict(gridcolor=GRID, zerolinecolor=GRID),
-    yaxis=dict(gridcolor=GRID, zerolinecolor=GRID), margin=dict(t=40, l=10, r=10, b=10),
+    font=dict(color=INK_2),
+    xaxis=dict(gridcolor=GRID, zerolinecolor=GRID, tickfont=dict(color=INK, size=13)),
+    yaxis=dict(gridcolor=GRID, zerolinecolor=GRID, tickfont=dict(color=INK, size=13)),
+    margin=dict(t=40, l=10, r=10, b=10),
 )
+
+DISPLAY_COLUMNS = {"symbol": "Symbol", "ats_shares": "ATS Shares", "ats_trades": "ATS Trades"}
 
 st.title("Dark Pool Scanner")
 st.caption("Free tier: FINRA weekly off-exchange (ATS) data, 2-4 week lag. "
@@ -55,7 +59,7 @@ with tab_scanner:
             fig.update_layout(**PLOTLY_LAYOUT, title=f"Heaviest off-exchange volume - week of {week}",
                                height=max(320, 28 * len(result)))
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(result, use_container_width=True, hide_index=True)
+            st.dataframe(result.rename(columns=DISPLAY_COLUMNS), use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
 with tab_analysis:
