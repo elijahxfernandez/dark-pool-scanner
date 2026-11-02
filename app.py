@@ -27,7 +27,7 @@ PLOTLY_LAYOUT = dict(
     font=dict(color=INK_2),
     xaxis=dict(gridcolor=GRID, zerolinecolor=GRID, tickfont=dict(color=INK, size=13)),
     yaxis=dict(gridcolor=GRID, zerolinecolor=GRID, tickfont=dict(color=INK, size=13)),
-    margin=dict(t=40, l=10, r=10, b=10),
+    margin=dict(t=60, l=10, r=10, b=10),
 )
 
 DISPLAY_COLUMNS = {
@@ -85,7 +85,9 @@ with tab_scanner:
                 x=result["ats_shares"][::-1], y=result["symbol"][::-1], orientation="h",
                 marker_color=BLUE, hovertemplate="%{y}: %{x:,.0f} shares<extra></extra>",
             ))
-            fig.update_layout(**PLOTLY_LAYOUT, title=f"Heaviest off-exchange volume - week of {week}",
+            fig.update_layout(**PLOTLY_LAYOUT,
+                               title=dict(text=f"Heaviest off-exchange volume - week of {week}",
+                                          x=0.5, xanchor="center", y=0.97, yanchor="top"),
                                height=max(320, 28 * len(result)),
                                xaxis_title="ATS (dark pool) shares traded that week",
                                yaxis_title="Symbol")
@@ -108,7 +110,9 @@ with tab_analysis:
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=series["week"], y=series["participation_pct"], mode="lines+markers",
                                       line=dict(color=BLUE), name="Participation %"))
-            fig.update_layout(**PLOTLY_LAYOUT, title=f"{symbol} - off-exchange share of weekly volume",
+            fig.update_layout(**PLOTLY_LAYOUT,
+                               title=dict(text=f"{symbol} - off-exchange share of weekly volume",
+                                          x=0.5, xanchor="center", y=0.97, yanchor="top"),
                                xaxis_title="Week", yaxis_title="% of weekly volume traded off-exchange (ATS)")
             st.plotly_chart(fig, use_container_width=True)
 
