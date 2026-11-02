@@ -14,6 +14,9 @@ import time
 
 import requests
 
+RETRY_ATTEMPTS = 4
+RETRY_BASE_DELAY = 2.0  # seconds; doubles each attempt (2, 4, 8s) - eases off a likely-overloaded server
+
 from shared.config import finra_credentials
 
 TOKEN_URL = "https://ews.fip.finra.org/fip/rest/ews/oauth2/access_token"
@@ -66,11 +69,19 @@ class FinraClient:
         body = {"limit": limit, "offset": offset}
         if filters:
             body["compareFilters"] = filters
-        resp = requests.post(url, headers=self._headers(), json=body, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
 
-    def query_all(self, filters: list[dict] | None = None, max_rows: int = 100_000) -> list[dict]:
+        last_exc = None
+        for attempt in range(RETRY_ATTEMPTS):
+            resp = requests.post(url, headers=self._headers(), json=body, timeout=30)
+            if resp.status_code < 500:  # 4xx is a real error (bad request) - don't retry those
+                resp.raise_for_status()
+                return resp.json()
+            last_exc = requests.exceptions.HTTPError(f"{resp.status_code} Server Error", response=resp)
+            if attempt < RETRY_ATTEMPTS - 1:
+                time.sleep(RETRY_BASE_DELAY * (2**attempt))
+        raise last_exc
+
+    def query_all(self, filters: list[dict] | None = None, max_rows: int = 100_000, verbose: bool = False) -> list[dict]:
         """Pages through query() until exhausted or max_rows is hit."""
         rows, offset = [], 0
         while len(rows) < max_rows:
@@ -78,6 +89,8 @@ class FinraClient:
             if not page:
                 break
             rows.extend(page)
+            if verbose:
+                print(f"    ...page at offset {offset}: +{len(page)} rows (total {len(rows)})", flush=True)
             if len(page) < PAGE_LIMIT:
                 break
             offset += PAGE_LIMIT
