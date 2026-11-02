@@ -30,7 +30,36 @@ PLOTLY_LAYOUT = dict(
     margin=dict(t=40, l=10, r=10, b=10),
 )
 
-DISPLAY_COLUMNS = {"symbol": "Symbol", "ats_shares": "ATS Shares", "ats_trades": "ATS Trades"}
+DISPLAY_COLUMNS = {
+    "symbol": "Symbol",
+    "ats_shares": "ATS Shares (Alternative Trading System)",
+    "ats_trades": "ATS Trades (Alternative Trading System)",
+}
+
+COLUMN_CONFIG = {
+    "Symbol": st.column_config.TextColumn(
+        "Symbol", help="The stock's ticker symbol.",
+    ),
+    "ATS Shares (Alternative Trading System)": st.column_config.NumberColumn(
+        "ATS Shares (Alternative Trading System)", format="%d",
+        help=(
+            "An Alternative Trading System (ATS) is a private venue - a 'dark pool' - "
+            "where large trades are matched away from public exchanges like the NYSE "
+            "or Nasdaq, without showing the order beforehand. This is the total number "
+            "of shares in this stock that traded through ATS venues this week, summed "
+            "across every ATS operator that reported to FINRA."
+        ),
+    ),
+    "ATS Trades (Alternative Trading System)": st.column_config.NumberColumn(
+        "ATS Trades (Alternative Trading System)", format="%d",
+        help=(
+            "The number of individual trades (not shares) executed through ATS/dark "
+            "pool venues this week. A high share count from few trades usually means "
+            "a small number of large block trades; a high share count from many trades "
+            "usually means many smaller fills."
+        ),
+    ),
+}
 
 st.title("Dark Pool Scanner")
 st.caption("Free tier: FINRA weekly off-exchange (ATS) data, 2-4 week lag. "
@@ -57,9 +86,12 @@ with tab_scanner:
                 marker_color=BLUE, hovertemplate="%{y}: %{x:,.0f} shares<extra></extra>",
             ))
             fig.update_layout(**PLOTLY_LAYOUT, title=f"Heaviest off-exchange volume - week of {week}",
-                               height=max(320, 28 * len(result)))
+                               height=max(320, 28 * len(result)),
+                               xaxis_title="ATS (dark pool) shares traded that week",
+                               yaxis_title="Symbol")
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(result.rename(columns=DISPLAY_COLUMNS), use_container_width=True, hide_index=True)
+            st.dataframe(result.rename(columns=DISPLAY_COLUMNS), use_container_width=True, hide_index=True,
+                         column_config=COLUMN_CONFIG)
 
 # ---------------------------------------------------------------------------
 with tab_analysis:
@@ -77,7 +109,7 @@ with tab_analysis:
             fig.add_trace(go.Scatter(x=series["week"], y=series["participation_pct"], mode="lines+markers",
                                       line=dict(color=BLUE), name="Participation %"))
             fig.update_layout(**PLOTLY_LAYOUT, title=f"{symbol} - off-exchange share of weekly volume",
-                               yaxis_title="% of volume")
+                               xaxis_title="Week", yaxis_title="% of weekly volume traded off-exchange (ATS)")
             st.plotly_chart(fig, use_container_width=True)
 
             weeks_with_z = series.dropna(subset=["z_score"])
