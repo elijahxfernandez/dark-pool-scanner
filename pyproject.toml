@@ -1,7 +1,7 @@
 [project]
-name = "dark-pool-scanner"
+name = "massive-training-tool"
 version = "0.1.0"
-description = "Dark pool / off-exchange flow tool. Starts on FINRA's free public historical ATS data; switches to Massive's live trades feed once subscribed."
+description = "Analyst training tools on Massive market data: dark pool / off-exchange flow (dark_pool/) and after-market event-study abnormal-return analysis (event_study/)."
 requires-python = ">=3.11"
 dependencies = [
   "requests",
@@ -9,6 +9,7 @@ dependencies = [
   "pandas",
   "streamlit>=1.66.1",
   "plotly>=7.1.0",
+  "massive>=2.3.2",
 ]
 
 [dependency-groups]

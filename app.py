@@ -1,34 +1,82 @@
-"""Dark Pool Scanner - local web dashboard (Streamlit).
+"""Signal Desk - local web dashboard (Streamlit). One place for both indicator
+tools instead of separate front ends per tool: a real trader doesn't run five
+different dashboards to check five related numbers.
 
     uv run streamlit run app.py
 
-Two views:
-  Scanner  - heaviest off-exchange (ATS) volume by symbol, for a chosen week
-  Analysis - one symbol's participation-rate history, the reversal/follow-through
-             test, and a prediction for the current week (see dark_pool/analysis.py)
+Tabs:
+  Dark Pool - Massive live/delayed trade feed (dark_pool/live.py), filtered to
+              off-exchange (FINRA TRF) prints, ranked by today's cross-sectional
+              outlier z-score (dark_pool.live.todays_outliers)
+  FINRA      - heaviest off-exchange (ATS) volume by symbol, free weekly data
+  Analysis   - one symbol's participation-rate history, reversal/follow-through
+               test, and a prediction for the current week (dark_pool/analysis.py)
+  NOI        - NYSE order imbalance auction events, read directly from the NOI
+               tool's own data folder (sibling project, no cross-repo import -
+               just reads its CSV/JSON output the same way its own dashboard does)
+  After-Market Event Analysis - abnormal return around a known event date (earnings, an outage,
+               guidance...) vs a benchmark, with a market-model t-stat reliability
+               gate (event_study/study.py)
 """
+
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 from dark_pool.analysis import MIN_ROWS_FOR_TEST, participation_series, predict_this_week, reversal_test
+from event_study.study import DEFAULT_BASELINE, DEFAULT_ESTIMATION_DAYS, DEFAULT_WINDOW, event_study
+from dark_pool.finra.collect import FINRA_DIR
+from dark_pool.live import available_days as live_available_days, todays_outliers
 from dark_pool.scanner import available_weeks, top_symbols
+
+CONSTITUENTS_PATH = FINRA_DIR.parent.parent / "reference_data" / "sp500_constituents.csv"
 
 # Same reference palette used across the NOI tool and market-charts, for a
 # consistent look across all three projects.
 UP, DOWN, BLUE, NEUTRAL = "#0ca30c", "#d03b3b", "#2a78d6", "#898781"
 INK, INK_2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e8e7e3", "#fcfcfb"
 
-st.set_page_config(page_title="Dark Pool Scanner", layout="wide")
+st.set_page_config(page_title="Signal Desk", layout="wide")
 
+# Streamlit applies its own dark theme on top of plotly figures by default, which
+# overrides these colors (title/axis-title text goes near-white, invisible against
+# the light paper_bgcolor below) - every st.plotly_chart call must pass theme=None
+# to actually get these colors instead of Streamlit's.
 PLOTLY_LAYOUT = dict(
     paper_bgcolor=SURFACE, plot_bgcolor=SURFACE,
-    font=dict(color=INK_2),
-    xaxis=dict(gridcolor=GRID, zerolinecolor=GRID, tickfont=dict(color=INK, size=13)),
-    yaxis=dict(gridcolor=GRID, zerolinecolor=GRID, tickfont=dict(color=INK, size=13)),
+    font=dict(color=INK, size=13),
+    xaxis=dict(gridcolor=GRID, zerolinecolor=GRID, tickfont=dict(color=INK, size=13),
+                title=dict(font=dict(color=INK, size=14))),
+    yaxis=dict(gridcolor=GRID, zerolinecolor=GRID, tickfont=dict(color=INK, size=13),
+                title=dict(font=dict(color=INK, size=14))),
     margin=dict(t=60, l=10, r=10, b=10),
 )
+
+
+def plot_title(text: str) -> dict:
+    """A centered, legible chart title - call this for the title= kwarg on every
+    chart (not baked into PLOTLY_LAYOUT, since every chart passes its own title=
+    text alongside **PLOTLY_LAYOUT in the same update_layout call)."""
+    return dict(text=text, x=0.5, xanchor="center", y=0.97, yanchor="top",
+                font=dict(color=INK, size=18))
+
+
+def ats_info_box():
+    with st.expander("ℹ️ What is ATS / FINRA TRF data?"):
+        st.markdown(
+            "**ATS (Alternative Trading System)** is the formal name for what's commonly "
+            "called a **dark pool** - a private venue where large trades are matched away "
+            "from public exchanges like the NYSE or Nasdaq, without showing the order "
+            "beforehand. Every ATS trade must still be reported to FINRA through one of "
+            "three **TRFs** (Trade Reporting Facilities): 201 (NYSE TRF), 202 (NASDAQ TRF "
+            "Carteret), or 203 (NASDAQ TRF Chicago) - that's where this data comes from.\n\n"
+            "**Shares** = total volume that traded off-exchange. **Trades** = number of "
+            "individual fills (not shares) - a high share count from few trades usually "
+            "means a small number of large block trades; from many trades usually means "
+            "many smaller fills."
+        )
 
 DISPLAY_COLUMNS = {
     "symbol": "Symbol",
@@ -41,7 +89,7 @@ COLUMN_CONFIG = {
         "Symbol", help="The stock's ticker symbol.",
     ),
     "ATS Shares (Alternative Trading System)": st.column_config.NumberColumn(
-        "ATS Shares (Alternative Trading System)", format="%d",
+        "ATS Shares (Alternative Trading System)", format="localized",
         help=(
             "An Alternative Trading System (ATS) is a private venue - a 'dark pool' - "
             "where large trades are matched away from public exchanges like the NYSE "
@@ -51,7 +99,7 @@ COLUMN_CONFIG = {
         ),
     ),
     "ATS Trades (Alternative Trading System)": st.column_config.NumberColumn(
-        "ATS Trades (Alternative Trading System)", format="%d",
+        "ATS Trades (Alternative Trading System)", format="localized",
         help=(
             "The number of individual trades (not shares) executed through ATS/dark "
             "pool venues this week. A high share count from few trades usually means "
@@ -61,14 +109,78 @@ COLUMN_CONFIG = {
     ),
 }
 
-st.title("Dark Pool Scanner")
-st.caption("Free tier: FINRA weekly off-exchange (ATS) data, 2-4 week lag. "
-           "Switches to Massive's live trades feed once that subscription is active.")
+# NOI tool's own data folder - sibling project on disk. Read directly (CSV/JSON
+# only), never imported as a package, so this app has no dependency on the NOI
+# tool's own .venv or code.
+NOI_ROOT = Path(__file__).resolve().parent.parent / "NOI tool (order imbalance)"
+NOI_DATA_DIR = NOI_ROOT / "data"
+NOI_STATUS_PATH = NOI_DATA_DIR / "collector_status.json"
 
-tab_scanner, tab_analysis = st.tabs(["Scanner", "Analysis"])
+
+@st.cache_data
+def load_constituents() -> pd.DataFrame:
+    if not CONSTITUENTS_PATH.exists():
+        return pd.DataFrame(columns=["symbol", "name", "sector", "sub_industry"])
+    return pd.read_csv(CONSTITUENTS_PATH)
+
+
+def noi_available_days() -> list[str]:
+    noi_dir = NOI_DATA_DIR / "noi"
+    if not noi_dir.exists():
+        return []
+    return sorted(p.stem for p in noi_dir.glob("*.csv"))
+
+
+st.title("Signal Desk")
+st.caption("Two off-exchange signal tools, one dashboard: dark pool (FINRA TRF) prints and NYSE order imbalance auctions.")
+
+tab_dark, tab_finra, tab_analysis, tab_noi, tab_event = st.tabs(
+    ["Dark Pool (Live)", "FINRA (Free, Weekly)", "Analysis", "NOI (Order Imbalance)", "After-Market Event Analysis"]
+)
 
 # ---------------------------------------------------------------------------
-with tab_scanner:
+with tab_dark:
+    st.caption("Massive's trade feed, filtered to off-exchange (FINRA TRF) prints. "
+               "15-min delayed on the Stocks Developer plan. Run: `uv run python -m dark_pool.live`")
+    days = live_available_days()
+    if not days:
+        st.warning("No live data yet. Start the collector: `uv run python -m dark_pool.live`")
+    else:
+        day = st.selectbox("Day", options=list(reversed(days)), index=0)
+        result = todays_outliers(day)
+        if result.empty:
+            st.info("No off-exchange prints logged for this day yet (min-notional threshold, or market closed).")
+        else:
+            top = result.head(25)
+            colors = [DOWN if o else BLUE for o in top["outlier"]]
+            fig = go.Figure(go.Bar(
+                x=top["participation_pct_of_adv"][::-1], y=top["symbol"][::-1], orientation="h",
+                marker_color=colors[::-1],
+                hovertemplate="%{y}: %{x:.2f}%% of ADV today<extra></extra>",
+            ))
+            fig.update_layout(**PLOTLY_LAYOUT,
+                               title=plot_title(f"Today's dark-pool participation (% of 20-day ADV) - {day}"),
+                               height=max(320, 24 * len(top)),
+                               xaxis_title="% of 20-day average daily volume (ADV) traded off-exchange today",
+                               yaxis_title="Symbol")
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.caption("Red bars: |z-score| >= 2 against today's other symbols - unusually heavy dark flow right now, not just a big number.")
+            st.dataframe(
+                result[["symbol", "cum_shares_today", "adv20", "participation_pct_of_adv", "z_score", "outlier"]],
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "symbol": "Symbol",
+                    "cum_shares_today": st.column_config.NumberColumn("Dark Shares Today", format="localized"),
+                    "adv20": st.column_config.NumberColumn("20-Day Avg Daily Volume", format="localized"),
+                    "participation_pct_of_adv": st.column_config.NumberColumn("% of ADV Today", format="%.2f%%"),
+                    "z_score": st.column_config.NumberColumn("Z-Score (vs. today's other symbols)", format="%.2f"),
+                    "outlier": st.column_config.CheckboxColumn("Outlier (|z| >= 2)"),
+                },
+            )
+            ats_info_box()
+
+# ---------------------------------------------------------------------------
+with tab_finra:
     weeks = available_weeks()
     if not weeks:
         st.warning("No data pulled yet. Run: `uv run python -m dark_pool.finra.collect --all`")
@@ -82,22 +194,47 @@ with tab_scanner:
             st.info("No ATS rows for this week.")
         else:
             fig = go.Figure(go.Bar(
-                x=result["ats_shares"][::-1], y=result["symbol"][::-1], orientation="h",
-                marker_color=BLUE, hovertemplate="%{y}: %{x:,.0f} shares<extra></extra>",
+                x=result["symbol"], y=result["ats_shares"],
+                marker_color=BLUE, hovertemplate="%{x}: %{y:,.0f} shares<extra></extra>",
             ))
             fig.update_layout(**PLOTLY_LAYOUT,
-                               title=dict(text=f"Heaviest off-exchange volume - week of {week}",
-                                          x=0.5, xanchor="center", y=0.97, yanchor="top"),
-                               height=max(320, 28 * len(result)),
-                               xaxis_title="ATS (dark pool) shares traded that week",
-                               yaxis_title="Symbol")
-            st.plotly_chart(fig, use_container_width=True)
+                               title=plot_title(f"Heaviest off-exchange (ATS / dark pool) volume - week of {week}"),
+                               height=500,
+                               xaxis_title="Symbol", yaxis_title="ATS (dark pool) shares traded that week")
+            # Angled ticker labels need real bottom margin, and a rotated y-axis title
+            # needs real left margin too, or the tick numbers get squeezed out entirely
+            # (PLOTLY_LAYOUT's defaults, b=10/l=10, are both far too tight here).
+            fig.update_layout(margin=dict(t=60, l=70, r=10, b=120))
+            # Category labels (tickers) need their own explicit font + angle, or they
+            # get crushed illegibly small once there are 20-50 of them side by side.
+            fig.update_xaxes(type="category", tickangle=-45, tickfont=dict(color=INK, size=13))
+            fig.update_yaxes(tickformat="~s", tickfont=dict(color=INK, size=13))  # compact: 100M not 100,000,000
+            st.plotly_chart(fig, use_container_width=True, theme=None)
             st.dataframe(result.rename(columns=DISPLAY_COLUMNS), use_container_width=True, hide_index=True,
                          column_config=COLUMN_CONFIG)
+            ats_info_box()
 
 # ---------------------------------------------------------------------------
 with tab_analysis:
-    symbol = st.text_input("Symbol (S&P 500 only - needs price/volume reference data)", value="JPM").upper().strip()
+    constituents = load_constituents()
+    if constituents.empty:
+        st.error(f"No S&P 500 reference data found at {CONSTITUENTS_PATH}.")
+        symbol = None
+    else:
+        sectors = sorted(constituents["sector"].dropna().unique())
+        col1, col2 = st.columns(2)
+        default_sector_ix = sectors.index("Information Technology") if "Information Technology" in sectors else 0
+        sector = col1.selectbox("Sector", options=sectors, index=default_sector_ix)
+
+        in_sector = constituents[constituents["sector"] == sector].sort_values("symbol")
+        sub_industries = sorted(in_sector["sub_industry"].dropna().unique())
+        sub_industry = col2.selectbox("Industry group", options=["All"] + sub_industries)
+        if sub_industry != "All":
+            in_sector = in_sector[in_sector["sub_industry"] == sub_industry]
+
+        options = in_sector["symbol"].tolist()
+        labels = {row["symbol"]: f"{row['symbol']} - {row['name']}" for _, row in in_sector.iterrows()}
+        symbol = st.selectbox("Symbol", options=options, format_func=lambda s: labels.get(s, s)) if options else None
 
     if symbol:
         try:
@@ -111,10 +248,18 @@ with tab_analysis:
             fig.add_trace(go.Scatter(x=series["week"], y=series["participation_pct"], mode="lines+markers",
                                       line=dict(color=BLUE), name="Participation %"))
             fig.update_layout(**PLOTLY_LAYOUT,
-                               title=dict(text=f"{symbol} - off-exchange share of weekly volume",
-                                          x=0.5, xanchor="center", y=0.97, yanchor="top"),
-                               xaxis_title="Week", yaxis_title="% of weekly volume traded off-exchange (ATS)")
-            st.plotly_chart(fig, use_container_width=True)
+                               title=plot_title(f"{symbol} - off-exchange (ATS / dark pool) share of weekly volume"),
+                               height=500,
+                               xaxis_title="Week (Monday)", yaxis_title="% of weekly volume traded off-exchange (ATS)")
+            # Angled date labels need real bottom margin, and the rotated y-axis title
+            # needs real left margin too, or the tick numbers get squeezed out entirely.
+            fig.update_layout(margin=dict(t=60, l=60, r=10, b=100))
+            # With 50+ weeks of history, date labels crush together illegibly unless
+            # the tick count is capped and they're angled instead of flat.
+            fig.update_xaxes(tickangle=-45, nticks=15, tickfont=dict(color=INK, size=12))
+            fig.update_yaxes(ticksuffix="%", tickfont=dict(color=INK, size=13))
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+            ats_info_box()
 
             weeks_with_z = series.dropna(subset=["z_score"])
             st.caption(f"{len(weeks_with_z)} weeks with a z-score computed "
@@ -140,3 +285,145 @@ with tab_analysis:
                 with contextlib.redirect_stdout(buf):
                     reversal_test(symbol)
                 st.text(buf.getvalue())
+
+# ---------------------------------------------------------------------------
+with tab_noi:
+    st.caption("NYSE order imbalance auction events (opening/closing). Collector runs in the NOI tool project "
+               "(Windows Scheduled Task, weekdays 8:55am-4:10pm ET). This reads its output directly.")
+
+    if NOI_STATUS_PATH.exists():
+        status = pd.read_json(NOI_STATUS_PATH, typ="series")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Collector status", status.get("status", "unknown"))
+        c2.metric("Events logged (this run)", f"{status.get('events', 0):,}")
+        c3.metric("Last updated", str(status.get("updated", "-"))[:19])
+    else:
+        st.info("NOI collector hasn't run yet - no status file found.")
+
+    noi_days = noi_available_days()
+    if not noi_days:
+        st.warning("No NOI auction data yet. Collector runs weekdays 8:55am-4:10pm ET; check back after the next session.")
+    else:
+        noi_day = st.selectbox("Day", options=list(reversed(noi_days)), index=0, key="noi_day")
+        noi_df = pd.read_csv(NOI_DATA_DIR / "noi" / f"{noi_day}.csv")
+        if noi_df.empty:
+            st.info("No NOI events logged for this day.")
+        else:
+            noi_df["abs_imbalance"] = noi_df["imbalance"].abs()
+            top_imbalances = noi_df.sort_values("abs_imbalance", ascending=False).head(25)
+            fig = go.Figure(go.Bar(
+                x=top_imbalances["imbalance"][::-1], y=top_imbalances["symbol"][::-1], orientation="h",
+                marker_color=[UP if v > 0 else DOWN for v in top_imbalances["imbalance"][::-1]],
+                hovertemplate="%{y}: %{x:,.0f} shares imbalance<extra></extra>",
+            ))
+            fig.update_layout(**PLOTLY_LAYOUT,
+                               title=plot_title(f"Largest NOI auction imbalances - {noi_day}"),
+                               height=max(320, 24 * len(top_imbalances)),
+                               xaxis_title="Imbalance (shares, + = buy-side, - = sell-side)",
+                               yaxis_title="Symbol")
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.dataframe(
+                noi_df[["time_et", "symbol", "auction_type", "imbalance", "paired", "indicative_price"]]
+                .sort_values("time_et", ascending=False),
+                use_container_width=True, hide_index=True,
+            )
+
+# ---------------------------------------------------------------------------
+with tab_event:
+    st.caption("Was the move around this date actually unusual, or just the market moving that day? "
+               "Fits a market-model regression on the prior trading days, then measures Cumulative "
+               "Abnormal Return (CAR) in the event window - the part of the move the benchmark doesn't explain.")
+
+    event_constituents = load_constituents()
+    if event_constituents.empty:
+        st.error(f"No S&P 500 reference data found at {CONSTITUENTS_PATH}.")
+        event_symbol = None
+    else:
+        event_sectors = sorted(event_constituents["sector"].dropna().unique())
+        c1, c2 = st.columns(2)
+        default_sector_ix = event_sectors.index("Information Technology") if "Information Technology" in event_sectors else 0
+        event_sector = c1.selectbox("Sector", options=event_sectors, index=default_sector_ix, key="event_sector")
+
+        event_in_sector = event_constituents[event_constituents["sector"] == event_sector].sort_values("symbol")
+        event_sub_industries = sorted(event_in_sector["sub_industry"].dropna().unique())
+        event_sub_industry = c2.selectbox("Industry group", options=["All"] + event_sub_industries, key="event_sub_industry")
+        if event_sub_industry != "All":
+            event_in_sector = event_in_sector[event_in_sector["sub_industry"] == event_sub_industry]
+
+        event_symbol_options = event_in_sector["symbol"].tolist()
+        event_symbol_labels = {row["symbol"]: f"{row['symbol']} - {row['name']}" for _, row in event_in_sector.iterrows()}
+        default_symbol_ix = event_symbol_options.index("CRWD") if "CRWD" in event_symbol_options else 0
+        event_symbol = st.selectbox(
+            "Symbol", options=event_symbol_options, index=default_symbol_ix,
+            format_func=lambda s: event_symbol_labels.get(s, s), key="event_symbol",
+        ) if event_symbol_options else None
+
+    c3, c4 = st.columns(2)
+    event_date_input = c3.date_input(
+        "Event date", value=pd.Timestamp("2024-07-19"),
+        min_value=pd.Timestamp("2003-01-01"), max_value=pd.Timestamp.today(), key="event_date",
+    )
+    event_date = event_date_input.strftime("%Y-%m-%d")
+
+    BENCHMARKS = {
+        "SPY - S&P 500": "SPY", "QQQ - Nasdaq 100": "QQQ", "DIA - Dow Jones": "DIA", "IWM - Russell 2000": "IWM",
+        "XLK - Technology": "XLK", "XLF - Financials": "XLF", "XLE - Energy": "XLE", "XLV - Health Care": "XLV",
+        "XLY - Consumer Discretionary": "XLY", "XLP - Consumer Staples": "XLP", "XLI - Industrials": "XLI",
+        "XLB - Materials": "XLB", "XLU - Utilities": "XLU", "XLRE - Real Estate": "XLRE", "XLC - Communication Services": "XLC",
+    }
+    benchmark_label = c4.selectbox("Baseline / benchmark", options=list(BENCHMARKS.keys()), key="event_baseline")
+    event_baseline = BENCHMARKS[benchmark_label]
+
+    c5, c6 = st.columns(2)
+    event_window = c5.slider("Event window (trading days each side)", 1, 10, DEFAULT_WINDOW)
+    event_estimation_days = c6.slider("Estimation window (prior trading days)", 30, 250, DEFAULT_ESTIMATION_DAYS)
+
+    if st.button("Run event study", disabled=not event_symbol):
+        try:
+            result = event_study(event_symbol, event_date, event_baseline, event_window, event_estimation_days)
+        except SystemExit as e:
+            st.error(str(e))
+            result = None
+
+        if result:
+            badge = "✅ statistically reliable (|t| ≥ 2)" if result["reliable"] else "⚠️ not yet reliable (|t| < 2) - treat as exploratory"
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Cumulative Abnormal Return (CAR)", f"{result['car_pct']:+.2f}%")
+            c2.metric("t-stat", result["t_stat"])
+            c3.metric("Market-model beta", result["beta"])
+            st.caption(f"Fit on {result['n_estimation_days']} prior trading days vs {result['baseline']} "
+                       f"(alpha={result['alpha']}) · {badge}")
+
+            window_df = result["event_window"]
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=window_df["date"], y=window_df["abnormal_ret"],
+                                  marker_color=[DOWN if v < 0 else UP for v in window_df["abnormal_ret"]],
+                                  name="Abnormal return"))
+            fig.update_layout(**PLOTLY_LAYOUT,
+                               title=plot_title(f"{result['symbol']} daily abnormal return vs {result['baseline']} - around {result['event_date']}"),
+                               height=460,
+                               xaxis_title="Date", yaxis_title="Abnormal return (%, actual - market-model expected)")
+            fig.update_xaxes(type="category", tickangle=-45, tickfont=dict(color=INK, size=12))
+            fig.update_yaxes(ticksuffix="%", tickfont=dict(color=INK, size=13))
+            fig.update_layout(margin=dict(t=60, l=60, r=10, b=100))
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+
+            st.dataframe(
+                window_df.rename(columns={
+                    "date": "Date", "ret_sym": f"{result['symbol']} Return %", "ret_base": f"{result['baseline']} Return %",
+                    "expected_ret": "Market-Model Expected %", "abnormal_ret": "Abnormal Return %",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+            with st.expander("ℹ️ What is an event study / abnormal return?"):
+                st.markdown(
+                    "A stock usually moves WITH the market, by an amount set by its **beta** (how sensitive it "
+                    "is to the benchmark's moves). The **market model** here is fit on the trading days BEFORE "
+                    "the event window, so it captures the stock's normal relationship to the benchmark without "
+                    "the event itself skewing the fit.\n\n"
+                    "**Abnormal Return (AR)** on a given day = the stock's actual return minus what the market "
+                    "model expected from that day's benchmark move alone. **Cumulative Abnormal Return (CAR)** "
+                    "sums AR across the event window - the total move that isn't explained by 'the market was "
+                    "up/down that day.' The t-stat tests whether that CAR is distinguishable from noise; |t| < 2 "
+                    "means treat it as exploratory, not a confirmed finding."
+                )

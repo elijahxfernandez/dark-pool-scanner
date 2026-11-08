@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "dark-pool-scanner",
+      "name": "massive-training-tool",
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "streamlit", "run", "app.py", "--server.headless", "true"],
       "port": 8501

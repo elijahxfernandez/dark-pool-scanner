@@ -1,82 +1,13 @@
-"""The Dark Pool Scanner.
+"""The free dark pool scanner - reads FINRA's free weekly ATS data we've already
+pulled (dark_pool/finra/collect.py) instead of live trades. Weekly, 2-4 week
+delayed, not per-trade - but free and needs no subscription.
 
-Two implementations live in this file:
-
-  1. THE REAL ONE (commented out below) - follows Massive's own tutorial exactly:
-     https://massive.com/blog/dark-pool-scanner-with-massive
-     Live trades, filtered to off-exchange prints (exchange==4, trf_id present),
-     above a notional threshold. Needs a paid Massive plan (Stocks Developer $79/mo
-     for 15-min delayed, or Advanced $199/mo for real-time) - uncomment and set
-     MASSIVE_API_KEY in .env once that's active.
-
-  2. THE FREE ONE (active now) - reads FINRA's free weekly ATS data we've already
-     pulled (dark_pool/finra/collect.py) instead of live trades. Weekly, 2-4 week
-     delayed, not per-trade - but free and working today. See collect.py's and this
-     project's README for what this trades off against the real scanner.
+For live, per-trade dark pool prints (needs the paid Massive subscription), see
+dark_pool/live.py instead.
 
     uv run python -m dark_pool.scanner --week 2025-10-13
     uv run python -m dark_pool.scanner --latest
 """
-
-# ============================================================================
-# THE REAL SCANNER (Massive's tutorial, live trades) - commented out until the
-# Stocks Developer/Advanced subscription is active. This is adapted directly from
-# https://massive.com/blog/dark-pool-scanner-with-massive, not rewritten.
-# ============================================================================
-#
-# import argparse
-# from datetime import datetime
-# from zoneinfo import ZoneInfo
-#
-# from massive import WebSocketClient
-# from massive.websocket.models import EquityTrade, Feed, Market
-#
-# from shared.config import api_key
-#
-# EASTERN = ZoneInfo("America/New_York")
-# TRF_NAMES = {201: "FINRA/NYSE TRF", 202: "FINRA/NASDAQ TRF Carteret", 203: "FINRA/NASDAQ TRF Chicago"}
-#
-#
-# def fmt_time(ts_ms: int) -> str:
-#     return datetime.fromtimestamp(ts_ms / 1000, tz=EASTERN).strftime("%H:%M:%S")
-#
-#
-# def show_trade(trade: EquityTrade):
-#     notional = trade.price * trade.size
-#     print(
-#         f"{fmt_time(trade.sip_timestamp)}  {trade.symbol:6}  "
-#         f"${trade.price:.2f} x {trade.size:,} = ${notional:,.0f}  "
-#         f"{TRF_NAMES.get(trade.trf_id, 'TRF ' + str(trade.trf_id))}"
-#     )
-#
-#
-# def main():
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument("--min-notional", type=float, default=100_000)
-#     parser.add_argument("--ticker", nargs="+")
-#     args = parser.parse_args()
-#
-#     subs = [f"T.{t.upper()}" for t in args.ticker] if args.ticker else ["T.*"]
-#     client = WebSocketClient(api_key=api_key(), feed=Feed.RealTime, market=Market.Stocks, subscriptions=subs)
-#
-#     def handler(msgs):
-#         for m in msgs:
-#             if not isinstance(m, EquityTrade) or m.exchange != 4 or not m.trf_id:
-#                 continue  # exchange==4 + trf_id present = off-exchange/dark pool print
-#             if m.price * m.size < args.min_notional:
-#                 continue
-#             show_trade(m)
-#
-#     print(f"Dark pool scanner (live, Massive) - {', '.join(subs)}")
-#     client.run(handle_msg=handler)
-#
-#
-# if __name__ == "__main__":
-#     main()
-
-# ============================================================================
-# THE FREE SCANNER (active) - FINRA's weekly ATS data instead of live trades.
-# ============================================================================
 
 import argparse
 

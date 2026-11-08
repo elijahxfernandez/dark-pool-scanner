@@ -12,6 +12,13 @@ DATA_DIR = ROOT / "data"
 REPORTS_DIR = ROOT / "reports"
 
 
+def api_key() -> str:
+    key = os.getenv("MASSIVE_API_KEY")
+    if not key:
+        raise SystemExit("MASSIVE_API_KEY is missing. Copy .env.example to .env and add your key.")
+    return key
+
+
 def finra_credentials() -> tuple[str, str]:
     client_id = os.getenv("FINRA_CLIENT_ID")
     client_secret = os.getenv("FINRA_CLIENT_SECRET")
